@@ -1,0 +1,39 @@
+service: claude-lex-qa-bot-nodejs
+
+provider:
+  name: aws
+  runtime: nodejs18.x
+  region: eu-west-2
+  environment:
+    KNOWLEDGE_BASE_ID: 7098R9JQI9
+  iamRoleStatements:
+    - Effect: Allow
+      Action:
+        - bedrock:InvokeModel
+        - bedrock:Retrieve  
+        - bedrock:RetrieveAndGenerate
+
+
+      Resource: '*'
+
+functions:
+  lexQAHandler:
+    handler: handler.handler
+    events:
+      - httpApi:
+          path: /chat
+          method: post
+
+plugins:
+  - serverless-api-gateway-throttling
+
+custom:
+  apiGatewayThrottling:
+    maxRequestsPerSecond: 10
+    maxConcurrentRequests: 5
+
+package:
+  exclude:
+    - node_modules/**
+    - .git/**
+    - .gitignore

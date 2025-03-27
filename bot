@@ -1,0 +1,128 @@
+service: claude-lex-qa-bot-nodejs
+
+provider:
+  name: aws
+  runtime: nodejs22.x
+  region: eu-west-2
+  environment:
+    KNOWLEDGE_BASE_ID: 7098R9JQI9
+  iamRoleStatements:
+    - Effect: Allow
+      Action:
+        - bedrock:InvokeModel
+        - bedrock:Retrieve  
+        - bedrock:RetrieveAndGenerate
+        - lex:CreateBot
+        - lex:CreateBotAlias
+        - lex:CreateIntent
+        - lex:UpdateBotAlias
+        - lambda:InvokeFunction
+        - lambda:AddPermission
+      Resource: '*'
+
+functions:
+  lexQAHandler:
+    handler: handler.handler
+    events:
+      - httpApi:
+          path: /chat
+          method: post
+
+resources:
+  Resources:
+    # Lex Bot Creation
+    LexQABot:
+      Type: AWS::Lex::Bot
+      Properties:
+        Name: ClaudeChatBot
+        Description: AI-powered chat bot with Bedrock integration
+        RoleArn: !GetAtt LexBotRole.Arn
+        DataPrivacy:
+          ChildDirected: false
+        IdleSessionTTLInSeconds: 300
+        BotLocales:
+          - LocaleId: en_US
+            Description: English (US) locale
+            Intents:
+              - Name: MessageBedrockIntent
+                Description: Intent to send message to Bedrock
+                SampleUtterances:
+                  - Utterance: "{message}"
+                IntentConfirmationSetting:
+                  PromptSpecification:
+                    MessageGroupsList:
+                      - Message:
+                          PlainTextMessage:
+                            Value: "Processing your request..."
+                CodeHookSpecification:
+                  LambdaCodeHook:
+                    LambdaArn: !GetAtt LexQAHandlerLambdaFunction.Arn
+                    CodeHookInterfaceVersion: "1.0"
+              
+              - Name: FallbackIntent
+                Description: Fallback intent for unhandled queries
+                IntentClosingSetting:
+                  ClosingResponse:
+                    MessageGroupsList:
+                      - Message:
+                          PlainTextMessage:
+                            Value: "I'm sorry, I didn't understand that. Could you please rephrase?"
+
+    # Lambda Permission for Lex to Invoke
+    LexLambdaPermission:
+      Type: AWS::Lambda::Permission
+      Properties:
+        FunctionName: !Ref LexQAHandlerLambdaFunction
+        Action: lambda:InvokeFunction
+        Principal: lex.amazonaws.com
+        SourceArn: !Sub 'arn:aws:lex:${AWS::Region}:${AWS::AccountId}:bot/${LexQABot}'
+
+    # Lex Bot Alias
+    LexBotAlias:
+      Type: AWS::Lex::BotAlias
+      Properties:
+        BotAliasName: prod
+        BotId: !Ref LexQABot
+        BotAliasLocaleSettings:
+          - LocaleId: en_US
+            BotAliasLocaleSetting:
+              Enabled: true
+              CodeHookSpecification:
+                LambdaCodeHook:
+                  LambdaArn: !GetAtt LexQAHandlerLambdaFunction.Arn
+                  CodeHookInterfaceVersion: "1.0"
+
+    # IAM Role for Lex Bot
+    LexBotRole:
+      Type: AWS::IAM::Role
+      Properties:
+        AssumeRolePolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service: lex.amazonaws.com
+              Action: sts:AssumeRole
+        Policies:
+          - PolicyName: LexBotPolicy
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: Allow
+                  Action:
+                    - lambda:InvokeFunction
+                  Resource: !GetAtt LexQAHandlerLambdaFunction.Arn
+
+plugins:
+  - serverless-api-gateway-throttling
+
+custom:
+  apiGatewayThrottling:
+    maxRequestsPerSecond: 10
+    maxConcurrentRequests: 5
+
+package:
+  exclude:
+    - node_modules/**
+    - .git/**
+    - .gitignore
