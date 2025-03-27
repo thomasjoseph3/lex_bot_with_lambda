@@ -1,27 +1,28 @@
-service: claude-lex-qa-bot-nodejs
+service: claude-lex-bedrock-bot
 
 provider:
   name: aws
   runtime: nodejs22.x
   region: eu-west-2
   environment:
-    KNOWLEDGE_BASE_ID: 7098R9JQI9
-  iamRoleStatements:
-    - Effect: Allow
-      Action:
-        - bedrock:InvokeModel
-        - bedrock:Retrieve  
-        - bedrock:RetrieveAndGenerate
-        - lex:CreateBot
-        - lex:CreateBotAlias
-        - lex:CreateIntent
-        - lex:UpdateBotAlias
-        - lambda:InvokeFunction
-        - lambda:AddPermission
-      Resource: '*'
+    KNOWLEDGE_BASE_ID: ${env:KNOWLEDGE_BASE_ID, '7098R9JQI9'}
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action:
+            - bedrock:InvokeModel
+            - bedrock:Retrieve
+            - bedrock:RetrieveAndGenerate
+            - logs:CreateLogGroup
+            - logs:CreateLogStream
+            - logs:PutLogEvents
+            - lambda:InvokeFunction
+            - lex:*
+          Resource: '*'
 
 functions:
-  lexQAHandler:
+  lexBedrockHandler:
     handler: handler.handler
     events:
       - httpApi:
@@ -30,69 +31,60 @@ functions:
 
 resources:
   Resources:
-    # Lex Bot Creation
-    LexQABot:
+    MyLexBot:
       Type: AWS::Lex::Bot
       Properties:
-        Name: ClaudeChatBot
-        Description: AI-powered chat bot with Bedrock integration
-        RoleArn: !GetAtt LexBotRole.Arn
-        DataPrivacy:
+        Name: MyBot
+        DataPrivacy: 
           ChildDirected: false
         IdleSessionTTLInSeconds: 300
+        RoleArn: !GetAtt LexBotRole.Arn
         BotLocales:
           - LocaleId: en_US
-            Description: English (US) locale
+            NluConfidenceThreshold: 0.40
             Intents:
-              - Name: MessageBedrockIntent
-                Description: Intent to send message to Bedrock
+              # First Intent: Generic Query Intent
+              - Name: QueryIntent
                 SampleUtterances:
-                  - Utterance: "{message}"
+                  - Utterance: I have a question
+                  - Utterance: Can you help me
+                  - Utterance: What information do you have
                 IntentConfirmationSetting:
                   PromptSpecification:
                     MessageGroupsList:
                       - Message:
                           PlainTextMessage:
-                            Value: "Processing your request..."
-                CodeHookSpecification:
+                            Value: "I'm ready to assist you with your query."
+                FulfillmentCodeHook:
+                  Enabled: true
                   LambdaCodeHook:
-                    LambdaArn: !GetAtt LexQAHandlerLambdaFunction.Arn
-                    CodeHookInterfaceVersion: "1.0"
-              
+                    CodeHookInterfaceVersion: '1.0'
+                    LambdaARN: !GetAtt LexBedrockHandlerLambdaFunction.Arn
+
+              # Second Intent: Fallback Intent
               - Name: FallbackIntent
-                Description: Fallback intent for unhandled queries
+                ParentIntentSignature: AMAZON.FallbackIntent
                 IntentClosingSetting:
                   ClosingResponse:
                     MessageGroupsList:
                       - Message:
                           PlainTextMessage:
-                            Value: "I'm sorry, I didn't understand that. Could you please rephrase?"
+                            Value: "I'm sorry, I didn't understand that. Could you please rephrase your question?"
 
-    # Lambda Permission for Lex to Invoke
-    LexLambdaPermission:
-      Type: AWS::Lambda::Permission
-      Properties:
-        FunctionName: !Ref LexQAHandlerLambdaFunction
-        Action: lambda:InvokeFunction
-        Principal: lex.amazonaws.com
-        SourceArn: !Sub 'arn:aws:lex:${AWS::Region}:${AWS::AccountId}:bot/${LexQABot}'
-
-    # Lex Bot Alias
-    LexBotAlias:
+    MyLexBotAlias:
       Type: AWS::Lex::BotAlias
       Properties:
         BotAliasName: prod
-        BotId: !Ref LexQABot
+        BotId: !Ref MyLexBot
         BotAliasLocaleSettings:
           - LocaleId: en_US
             BotAliasLocaleSetting:
               Enabled: true
               CodeHookSpecification:
                 LambdaCodeHook:
-                  LambdaArn: !GetAtt LexQAHandlerLambdaFunction.Arn
-                  CodeHookInterfaceVersion: "1.0"
+                  CodeHookInterfaceVersion: '1.0'
+                  LambdaARN: !GetAtt LexBedrockHandlerLambdaFunction.Arn
 
-    # IAM Role for Lex Bot
     LexBotRole:
       Type: AWS::IAM::Role
       Properties:
@@ -101,7 +93,7 @@ resources:
           Statement:
             - Effect: Allow
               Principal:
-                Service: lex.amazonaws.com
+                Service: lexv2.amazonaws.com
               Action: sts:AssumeRole
         Policies:
           - PolicyName: LexBotPolicy
@@ -110,8 +102,19 @@ resources:
               Statement:
                 - Effect: Allow
                   Action:
+                    - logs:CreateLogGroup
+                    - logs:CreateLogStream
+                    - logs:PutLogEvents
                     - lambda:InvokeFunction
-                  Resource: !GetAtt LexQAHandlerLambdaFunction.Arn
+                  Resource: '*'
+
+    LexLambdaPermission:
+      Type: AWS::Lambda::Permission
+      Properties:
+        Action: lambda:InvokeFunction
+        FunctionName: !Ref LexBedrockHandlerLambdaFunction
+        Principal: lexv2.amazonaws.com
+        SourceArn: !GetAtt MyLexBot.Arn
 
 plugins:
   - serverless-api-gateway-throttling
@@ -126,3 +129,5 @@ package:
     - node_modules/**
     - .git/**
     - .gitignore
+    - test/**
+    - '*.md'
