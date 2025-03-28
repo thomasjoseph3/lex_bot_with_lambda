@@ -5,7 +5,7 @@ provider:
   runtime: nodejs22.x
   region: eu-west-2
   environment:
-    KNOWLEDGE_BASE_ID: ${env:KNOWLEDGE_BASE_ID, '7098R9JQI9'}
+    KNOWLEDGE_BASE_ID: ${env:KNOWLEDGE_BASE_ID, 'HKA5AHELTJ'}
   iam:
     role:
       statements:
@@ -18,13 +18,14 @@ provider:
             - logs:CreateLogStream
             - logs:PutLogEvents
             - lambda:InvokeFunction
+            - lex:RecognizeText
             - lex:*
-          Resource: '*'
+          Resource: "*"
 
 functions:
-  lexBedrockHandler:
+  LexBedrockHandler:
     handler: handler.handler
-    name: claude-lex-bedrock-bot-dev-lexBedrockHandler  # Explicitly set the function name
+    name: claude-lex-bedrock-bot-dev-LexBedrockHandler  # Static physical name
     events:
       - httpApi:
           path: /chat
@@ -44,18 +45,48 @@ resources:
           - LocaleId: en_US
             NluConfidenceThreshold: 0.40
             Intents:
-              - Name: QueryIntent
+              - Name: GreetingIntent
                 SampleUtterances:
-                  - Utterance: I have a question
-                  - Utterance: Can you help me
-                  - Utterance: What information do you have
-                IntentConfirmationSetting:
-                  PromptSpecification:
-                    MaxRetries: 2
+                  - Utterance: "Hi"
+                  - Utterance: "Hello"
+                  - Utterance: "Good morning"
+                  - Utterance: "Hey"
+                IntentClosingSetting:
+                  ClosingResponse:
                     MessageGroupsList:
                       - Message:
                           PlainTextMessage:
-                            Value: "I'm ready to assist you with your query."
+                            Value: "Hello! How can I assist you today?"
+              - Name: QueryIntent
+                Slots:
+                  - Name: query
+                    SlotTypeName: AMAZON.AlphaNumeric  # Changed from AMAZON.SearchQuery
+                    ValueElicitationSetting:
+                      SlotConstraint: Required
+                      PromptSpecification:
+                        MessageGroupsList:
+                          - Message:
+                              PlainTextMessage:
+                                Value: "What would you like to know?"
+                        MaxRetries: 2
+                SlotPriorities:  # Added to define slot priority
+                  - SlotName: query
+                    Priority: 1
+                SampleUtterances:
+                  - Utterance: "{query}"
+                  - Utterance: "What is {query}"
+                  - Utterance: "Tell me about {query}"
+                  - Utterance: "Explain {query}"
+                  - Utterance: "Can you help me with {query}"
+                  - Utterance: "I want to know {query}"
+                  - Utterance: "What do you know about {query}"
+                IntentConfirmationSetting:
+                  PromptSpecification:
+                    MessageGroupsList:
+                      - Message:
+                          PlainTextMessage:
+                            Value: "I’ll find an answer for your question: '{query}'. Is that okay?"
+                    MaxRetries: 2
                 FulfillmentCodeHook:
                   Enabled: true
               - Name: FallbackIntent
@@ -67,26 +98,37 @@ resources:
                           PlainTextMessage:
                             Value: "I'm sorry, I didn't understand that. Could you please rephrase your question?"
 
+    MyLexBotVersion:
+      Type: AWS::Lex::BotVersion
+      Properties:
+        BotId: !Ref MyLexBot
+        BotVersionLocaleSpecification:
+          - LocaleId: en_US
+            BotVersionLocaleDetails:
+              SourceBotVersion: "DRAFT"
+      DependsOn: MyLexBot
+
     MyLexBotAlias:
       Type: AWS::Lex::BotAlias
       Properties:
         BotAliasName: prod
         BotId: !Ref MyLexBot
+        BotVersion: "1"
         BotAliasLocaleSettings:
           - LocaleId: en_US
             BotAliasLocaleSetting:
               Enabled: true
               CodeHookSpecification:
                 LambdaCodeHook:
-                  CodeHookInterfaceVersion: '1.0'
-                  # Use full ARN for Lambda function
-                  LambdaArn: !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:claude-lex-bedrock-bot-dev-lexBedrockHandler'
-
+                  CodeHookInterfaceVersion: "1.0"
+                  LambdaArn: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:claude-lex-bedrock-bot-dev-LexBedrockHandler"
+      DependsOn: MyLexBotVersion
+        
     LexBotRole:
       Type: AWS::IAM::Role
       Properties:
         AssumeRolePolicyDocument:
-          Version: '2012-10-17'
+          Version: "2012-10-17"
           Statement:
             - Effect: Allow
               Principal:
@@ -95,7 +137,7 @@ resources:
         Policies:
           - PolicyName: LexBotAccessPolicy
             PolicyDocument:
-              Version: '2012-10-17'
+              Version: "2012-10-17"
               Statement:
                 - Effect: Allow
                   Action:
@@ -106,16 +148,15 @@ resources:
                     - bedrock:InvokeModel
                     - bedrock:Retrieve
                     - bedrock:RetrieveAndGenerate
-                  Resource: '*'
+                  Resource: "*"
 
     LexLambdaPermission:
       Type: AWS::Lambda::Permission
       Properties:
         Action: lambda:InvokeFunction
-        # Use the full function name
-        FunctionName: claude-lex-bedrock-bot-dev-lexBedrockHandler
+        FunctionName: claude-lex-bedrock-bot-dev-LexBedrockHandler
         Principal: lexv2.amazonaws.com
-        SourceArn: !Sub 'arn:aws:lex:${AWS::Region}:${AWS::AccountId}:bot-alias/${MyLexBot}/prod'
+        SourceArn: !Sub "arn:aws:lex:${AWS::Region}:${AWS::AccountId}:bot-alias/${MyLexBot}/${MyLexBotAlias}"
 
 plugins:
   - serverless-api-gateway-throttling
@@ -131,4 +172,4 @@ package:
     - .git/**
     - .gitignore
     - test/**
-    - '*.md'
+    - "*.md"

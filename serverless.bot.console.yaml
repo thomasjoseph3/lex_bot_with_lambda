@@ -1,0 +1,29 @@
+#serverless yaml for bot which is creted using console and the qna intent which will work bet
+service: lex-lambda-chat
+
+provider:
+  name: aws
+  runtime: nodejs22.x
+  region: eu-west-2
+  environment:
+    BOT_ID: ${env:BOT_ID}
+    BOT_ALIAS_ID: ${env:BOT_ALIAS_ID}
+    LOCALE_ID: "en_US"
+  iamRoleStatements:
+    - Effect: Allow
+      Action:
+        - lex:RecognizeText
+      Resource: 
+        - "arn:aws:lex:${self:provider.region}:*:bot-alias/${env:BOT_ID}/${env:BOT_ALIAS_ID}"
+
+functions:
+  chat:
+    handler: lex_handler.handler
+    events:
+      - http:
+          path: chat
+          method: post
+          cors: true
+
+plugins:
+  - serverless-dotenv-plugin

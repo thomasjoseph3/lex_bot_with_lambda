@@ -26,42 +26,38 @@ const processQuery = async (question) => {
   return await client.send(command);
 };
 
-const errorResponse = (statusCode, errorDetails, isLex = false) => {
-  if (isLex) {
-    return {
-      sessionState: {
-        dialogAction: { type: "Close" },
-        intent: { state: "Failed" },
-      },
-      messages: [
-        {
-          contentType: "PlainText",
-          content: `Error: ${errorDetails}`,
-        },
-      ],
-    };
-  }
-
+const errorResponse = (event, errorDetails) => {
+  // Lex V2 error response format
   return {
-    statusCode,
-    headers: {
-      "Content-Type": "application/json",
-      "Access-Control-Allow-Origin": "*",
+    sessionState: {
+      dialogAction: { type: "Close" },
+      intent: { state: "Failed" },
     },
-    body: JSON.stringify({ error: errorDetails }),
+    messages: [
+      {
+        contentType: "PlainText",
+        content: `Error: ${errorDetails}`,
+      },
+    ],
   };
 };
 
 exports.handler = async (event) => {
   try {
-    // Handle Lex V2 requests
-    if (event.bot && event.sessionState) {
-      const question = event.inputTranscript?.trim();
+    // Lex V2 handling
+    if (event.sessionState && event.bot) {
+      // Extract query from slots or input transcript
+      const question = 
+        event.sessionState.intent.slots?.QuerySlot?.value?.interpretedValue || 
+        event.inputTranscript?.trim();
 
-      if (!question) return errorResponse(400, "Empty question", true);
+      if (!question) {
+        return errorResponse(event, "No query provided");
+      }
 
       const response = await processQuery(question);
 
+      // Lex V2 response format
       return {
         sessionState: {
           sessionAttributes: {
@@ -76,24 +72,23 @@ exports.handler = async (event) => {
         messages: [
           {
             contentType: "PlainText",
-            content: response.output.text,
+            content: response.output.text || "I couldn't find a specific answer.",
           },
         ],
       };
     }
 
-    // Handle API Gateway requests
-    if (!event.body) return errorResponse(400, "Missing request body");
-
-    let body;
-    try {
-      body = JSON.parse(event.body);
-    } catch (e) {
-      return errorResponse(400, "Invalid JSON format");
+    // Fallback for non-Lex invocations (e.g., API Gateway)
+    if (!event.body) {
+      throw new Error("Missing request body");
     }
 
+    const body = JSON.parse(event.body);
     const question = body.question?.trim();
-    if (!question) return errorResponse(400, "Question is required");
+
+    if (!question) {
+      throw new Error("Question is required");
+    }
 
     const response = await processQuery(question);
 
@@ -119,12 +114,16 @@ exports.handler = async (event) => {
       stack: error.stack,
     });
 
-    // Lex error format
-    if (event.bot) {
-      return errorResponse(500, "Failed to process question", true);
-    }
-
-    // API Gateway error format
-    return errorResponse(500, error.message);
+    // Differentiate error response based on event type
+    return event.sessionState && event.bot 
+      ? errorResponse(event, "Failed to process question")
+      : {
+          statusCode: 500,
+          headers: {
+            "Content-Type": "application/json",
+            "Access-Control-Allow-Origin": "*",
+          },
+          body: JSON.stringify({ error: error.message }),
+        };
   }
 };
