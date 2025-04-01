@@ -5,7 +5,7 @@ provider:
   runtime: nodejs22.x
   region: eu-west-2
   environment:
-    KNOWLEDGE_BASE_ID: ${env:KNOWLEDGE_BASE_ID, 'HKA5AHELTJ'}
+    KNOWLEDGE_BASE_ID: ${env:KNOWLEDGE_BASE_ID, 'M86AHPZ6CL'}
   iam:
     role:
       statements:
@@ -18,17 +18,28 @@ provider:
             - logs:CreateLogStream
             - logs:PutLogEvents
             - lambda:InvokeFunction
-            - lex:RecognizeText
             - lex:*
           Resource: "*"
 
 functions:
   LexBedrockHandler:
     handler: handler.handler
-    name: claude-lex-bedrock-bot-dev-LexBedrockHandler  # Static physical name
+    name: claude-lex-bedrock-bot-dev-LexBedrockHandler
+    timeout: 15  
     events:
       - httpApi:
           path: /chat
+          method: post
+  BotInputHandler:
+    handler: lexHandler.handler
+    name: lex-chat
+    environment:
+      BOT_ID: !Ref MyLexBot
+      BOT_ALIAS_ID: !GetAtt MyLexBotAlias.BotAliasId
+      LOCALE_ID: "en_US"
+    events:
+      - httpApi:
+          path: /bot
           method: post
 
 resources:
@@ -57,46 +68,10 @@ resources:
                       - Message:
                           PlainTextMessage:
                             Value: "Hello! How can I assist you today?"
-              - Name: QueryIntent
-                Slots:
-                  - Name: query
-                    SlotTypeName: AMAZON.AlphaNumeric  # Changed from AMAZON.SearchQuery
-                    ValueElicitationSetting:
-                      SlotConstraint: Required
-                      PromptSpecification:
-                        MessageGroupsList:
-                          - Message:
-                              PlainTextMessage:
-                                Value: "What would you like to know?"
-                        MaxRetries: 2
-                SlotPriorities:  # Added to define slot priority
-                  - SlotName: query
-                    Priority: 1
-                SampleUtterances:
-                  - Utterance: "{query}"
-                  - Utterance: "What is {query}"
-                  - Utterance: "Tell me about {query}"
-                  - Utterance: "Explain {query}"
-                  - Utterance: "Can you help me with {query}"
-                  - Utterance: "I want to know {query}"
-                  - Utterance: "What do you know about {query}"
-                IntentConfirmationSetting:
-                  PromptSpecification:
-                    MessageGroupsList:
-                      - Message:
-                          PlainTextMessage:
-                            Value: "I’ll find an answer for your question: '{query}'. Is that okay?"
-                    MaxRetries: 2
-                FulfillmentCodeHook:
-                  Enabled: true
               - Name: FallbackIntent
                 ParentIntentSignature: AMAZON.FallbackIntent
-                IntentClosingSetting:
-                  ClosingResponse:
-                    MessageGroupsList:
-                      - Message:
-                          PlainTextMessage:
-                            Value: "I'm sorry, I didn't understand that. Could you please rephrase your question?"
+                FulfillmentCodeHook:
+                  Enabled: true  # Invoke Lambda for dynamic response
 
     MyLexBotVersion:
       Type: AWS::Lex::BotVersion
@@ -123,7 +98,7 @@ resources:
                   CodeHookInterfaceVersion: "1.0"
                   LambdaArn: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:claude-lex-bedrock-bot-dev-LexBedrockHandler"
       DependsOn: MyLexBotVersion
-        
+
     LexBotRole:
       Type: AWS::IAM::Role
       Properties:
@@ -156,10 +131,19 @@ resources:
         Action: lambda:InvokeFunction
         FunctionName: claude-lex-bedrock-bot-dev-LexBedrockHandler
         Principal: lexv2.amazonaws.com
-        SourceArn: !Sub "arn:aws:lex:${AWS::Region}:${AWS::AccountId}:bot-alias/${MyLexBot}/${MyLexBotAlias}"
+        SourceArn: !Sub "arn:aws:lex:${AWS::Region}:${AWS::AccountId}:bot-alias/${MyLexBot}/${MyLexBotAlias.BotAliasId}"
+
+  Outputs:
+    BotId:
+      Description: The ID of the Lex Bot
+      Value: !Ref MyLexBot
+    AliasId:
+      Description: The ID of the Lex Bot Alias
+      Value: !GetAtt MyLexBotAlias.BotAliasId
 
 plugins:
   - serverless-api-gateway-throttling
+  - serverless-dotenv-plugin
 
 custom:
   apiGatewayThrottling:

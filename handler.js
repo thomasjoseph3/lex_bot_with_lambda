@@ -4,16 +4,17 @@ const {
 } = require("@aws-sdk/client-bedrock-agent-runtime");
 
 const client = new BedrockAgentRuntimeClient({ region: "eu-west-2" });
-
+const ASSISTANT_INSTRUCTION = `
+You are the Totem website. Speak as the website itself, Provide accurate answers based solely on the knowledge base, without mentioning search results or external sources. If the knowledge base lacks information, say: "I don’t have that information right now. How else can I assist you?" Do not use phrases like "based on the information provided" or "it appears." Answer directly as Totem.`;
 const processQuery = async (question) => {
+  const prompt = `${ASSISTANT_INSTRUCTION}\n\nUser question: ${question}`;
   const command = new RetrieveAndGenerateCommand({
-    input: { text: question },
+    input: { text: prompt },
     retrieveAndGenerateConfiguration: {
       type: "KNOWLEDGE_BASE",
       knowledgeBaseConfiguration: {
         knowledgeBaseId: process.env.KNOWLEDGE_BASE_ID,
-        modelArn:
-          "arn:aws:bedrock:eu-west-2::foundation-model/anthropic.claude-3-sonnet-20240229-v1:0",
+        modelArn: "arn:aws:bedrock:eu-west-2::foundation-model/anthropic.claude-3-sonnet-20240229-v1:0",
         retrievalConfiguration: {
           vectorSearchConfiguration: {
             numberOfResults: 5,
@@ -27,7 +28,7 @@ const processQuery = async (question) => {
 };
 
 const errorResponse = (event, errorDetails) => {
-  // Lex V2 error response format
+  console.log("Returning error response:", errorDetails);
   return {
     sessionState: {
       dialogAction: { type: "Close" },
@@ -43,21 +44,22 @@ const errorResponse = (event, errorDetails) => {
 };
 
 exports.handler = async (event) => {
+  console.log("Received event:", JSON.stringify(event, null, 2));
   try {
-    // Lex V2 handling
     if (event.sessionState && event.bot) {
-      // Extract query from slots or input transcript
-      const question = 
-        event.sessionState.intent.slots?.QuerySlot?.value?.interpretedValue || 
-        event.inputTranscript?.trim();
+      const question = event.inputTranscript?.trim();
+      console.log("Extracted question:", question);
 
       if (!question) {
-        return errorResponse(event, "No query provided");
+        return errorResponse(event, "No input provided");
       }
 
       const response = await processQuery(question);
+      console.log("Bedrock response:", JSON.stringify(response, null, 2));
 
-      // Lex V2 response format
+      const answer = response.output?.text || "I couldn't find a specific answer.";
+      console.log("Final answer:", answer);
+
       return {
         sessionState: {
           sessionAttributes: {
@@ -72,26 +74,23 @@ exports.handler = async (event) => {
         messages: [
           {
             contentType: "PlainText",
-            content: response.output.text || "I couldn't find a specific answer.",
+            content: answer,
           },
         ],
       };
     }
 
-    // Fallback for non-Lex invocations (e.g., API Gateway)
+    // API Gateway /chat endpoint (unchanged)
     if (!event.body) {
       throw new Error("Missing request body");
     }
-
     const body = JSON.parse(event.body);
     const question = body.question?.trim();
 
     if (!question) {
       throw new Error("Question is required");
     }
-
     const response = await processQuery(question);
-
     return {
       statusCode: 200,
       headers: {
@@ -99,11 +98,11 @@ exports.handler = async (event) => {
         "Access-Control-Allow-Origin": "*",
       },
       body: JSON.stringify({
-        answer: response.output.text,
+        answer: response.output?.text || "I couldn't find a specific answer.",
         sessionId: response.sessionId,
         citations: response.citations?.map((c) => ({
-          source: c.generatedResponsePart.reference?.location?.s3Location?.uri,
-          content: c.generatedResponsePart.reference?.content?.text,
+          source: c.retrievedReferences?.[0]?.location?.s3Location?.uri,
+          content: c.retrievedReferences?.[0]?.content?.text,
         })),
       }),
     };
@@ -113,9 +112,7 @@ exports.handler = async (event) => {
       code: error.code,
       stack: error.stack,
     });
-
-    // Differentiate error response based on event type
-    return event.sessionState && event.bot 
+    return event.sessionState && event.bot
       ? errorResponse(event, "Failed to process question")
       : {
           statusCode: 500,
@@ -123,7 +120,7 @@ exports.handler = async (event) => {
             "Content-Type": "application/json",
             "Access-Control-Allow-Origin": "*",
           },
-          body: JSON.stringify({ error: error.message }),
+          body: JSON.stringify({ error: "Internal server error" }),
         };
   }
 };

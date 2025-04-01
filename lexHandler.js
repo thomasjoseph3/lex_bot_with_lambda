@@ -1,44 +1,33 @@
-const {
-  LexRuntimeV2Client,
-  RecognizeTextCommand,
-} = require("@aws-sdk/client-lex-runtime-v2");
+const { LexRuntimeV2Client, RecognizeTextCommand } = require("@aws-sdk/client-lex-runtime-v2");
 
-const lexClient = new LexRuntimeV2Client();
+const lexClient = new LexRuntimeV2Client({ region: "eu-west-2" });
 
-// Helper function for exponential backoff
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-const sendMessageToLex = async (inputText, maxRetries = 3) => {
+const sendMessageToLex = async (inputText, sessionId, maxRetries = 3) => {
   const params = {
     botId: process.env.BOT_ID,
     botAliasId: process.env.BOT_ALIAS_ID,
-    localeId: process.env.LOCALE_ID,
+    localeId: "en_US",
+    sessionId: sessionId,
     text: inputText,
   };
 
   let attempts = 0;
-  let success = false;
-  let response;
-
-  while (attempts < maxRetries && !success) {
+  while (attempts < maxRetries) {
     try {
       const command = new RecognizeTextCommand(params);
-      response = await lexClient.send(command);
-      success = true;
+      const response = await lexClient.send(command);
       return response;
     } catch (err) {
       attempts += 1;
-      console.error(`Attempt ${attempts} failed:`, err.message);
-
+      console.error(`Attempt ${attempts} failed: ${err.message}`);
       if (attempts < maxRetries) {
-        const delay = Math.pow(2, attempts) * 100; // Exponential backoff
-        console.log(`Retrying after ${delay}ms...`);
+        const delay = Math.pow(2, attempts) * 100;
+        console.info(`Retrying after ${delay}ms...`);
         await wait(delay);
       } else {
-        console.error("Max retries reached. Lex communication failed.");
-        throw new Error(
-          "Failed to communicate with Lex after multiple attempts."
-        );
+        throw new Error("Failed to communicate with Lex after multiple attempts");
       }
     }
   }
@@ -46,7 +35,7 @@ const sendMessageToLex = async (inputText, maxRetries = 3) => {
 
 exports.handler = async (event) => {
   try {
-    // Parsing the request body
+    console.log("Env vars:", process.env.BOT_ID, process.env.BOT_ALIAS_ID);
     const body = JSON.parse(event.body);
     const userInput = body.question;
 
@@ -61,15 +50,10 @@ exports.handler = async (event) => {
       };
     }
 
-    // Sending message to Lex
-    const lexResponse = await sendMessageToLex(userInput);
+    const sessionId = Date.now().toString(); // Unique per request
+    const lexResponse = await sendMessageToLex(userInput, sessionId);
 
-    // Checking if response from Lex is valid
-    if (
-      !lexResponse ||
-      !lexResponse.messages ||
-      lexResponse.messages.length === 0
-    ) {
+    if (!lexResponse || !lexResponse.messages || lexResponse.messages.length === 0) {
       return {
         statusCode: 500,
         headers: {
@@ -80,7 +64,6 @@ exports.handler = async (event) => {
       };
     }
 
-    // Return success response
     return {
       statusCode: 200,
       headers: {
@@ -88,22 +71,18 @@ exports.handler = async (event) => {
         "Access-Control-Allow-Origin": "*",
       },
       body: JSON.stringify({
-        lexResponse: lexResponse.messages[0].content,
+        answer: lexResponse.messages[0].content, 
       }),
     };
   } catch (err) {
     console.error("Error in handler:", err.message);
-
     return {
       statusCode: 500,
       headers: {
         "Content-Type": "application/json",
         "Access-Control-Allow-Origin": "*",
       },
-      body: JSON.stringify({
-        error: "Internal server error",
-        details: err.message,
-      }),
+      body: JSON.stringify({ error: "Internal server error", details: err.message }),
     };
   }
 };
